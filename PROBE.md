@@ -10,8 +10,12 @@ Workflow `.github/workflows/probe.yml`, run 38831399920 on `ubuntu-latest` (publ
   `modules:final` 8.9 s after boot; the whole guest run, including an apt install of linuxptp,
   took 45 s.
 
-Not yet established: whether the Debian cloud kernel has ptp_kvm and reads host time with the
-guest clock set wrong. The first run's in-guest script did not execute (a YAML quoting error,
-fixed in the next commit); a second run was started and its console log is the `probe-console`
-artifact of the latest run. If ptp_kvm is missing, pick an image whose kernel has it; this is an
-image choice, not a design question.
+Second run (38831693128), with the in-guest script fixed:
+
+- The Debian 13 cloud kernel has ptp_kvm: `modprobe ptp_kvm` registered ptp0 "KVM virtual PTP"
+  and udev created `/dev/ptp_kvm`.
+- With the guest clock set to 2020-01-01, `phc_ctl /dev/ptp0 get cmp` read host time
+  (2026-10-16 00:50:57), i.e. true time from the host is available regardless of the guest clock.
+
+So the Debian genericcloud image is usable as the guest image as it is, and the true-time source
+for the simulator exists in CI.
