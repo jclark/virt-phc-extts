@@ -3,3 +3,13 @@ probe/seed.img
 probe/user-data
 probe/meta-data
 probe/console.log
+.local/
+module/*.o
+module/*.ko
+module/*.mod
+module/*.mod.c
+module/.*.cmd
+module/Module.symvers
+module/modules.order
+tools/test-vphc
+__pycache__/
