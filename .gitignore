@@ -1,0 +1,5 @@
+probe/disk.qcow2
+probe/seed.img
+probe/user-data
+probe/meta-data
+probe/console.log

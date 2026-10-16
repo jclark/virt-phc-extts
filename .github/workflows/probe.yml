@@ -1,0 +1,51 @@
+# Probe: what a GitHub-hosted public x86 runner supports for this project.
+# Prints whether /dev/kvm exists, boots a Debian cloud image under KVM (TCG fallback)
+# and shows, from inside the guest, whether ptp_kvm gives host time while the guest
+# clock is deliberately wrong.
+
+name: Probe runner
+
+on:
+  push:
+    paths: ['.github/workflows/probe.yml', 'probe/**']
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Runner facts
+      run: |
+        uname -a
+        nproc; free -g | sed -n 2p
+        echo "kvm: $(ls -l /dev/kvm 2>&1)"
+        echo "cpu virt flags: $(grep -c -E 'vmx|svm' /proc/cpuinfo || true)"
+        echo "lockdown: $(cat /sys/kernel/security/lockdown 2>&1)"
+        id
+
+    - name: Install QEMU
+      run: |
+        sudo apt-get update -q
+        sudo apt-get install -y -q qemu-system-x86 qemu-utils cloud-image-utils
+        qemu-system-x86_64 --version | head -1
+        if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm; ls -l /dev/kvm; fi
+
+    - name: Fetch Debian 13 cloud image
+      run: |
+        t0=$(date +%s)
+        curl -sSfL -o probe/disk.qcow2 https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2
+        echo "image download: $(( $(date +%s) - t0 )) s, $(stat -c %s probe/disk.qcow2) bytes"
+
+    - name: Boot guest and probe
+      run: bash probe/run.sh
+
+    - name: Upload console log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: probe-console
+        path: probe/console.log
+        if-no-files-found: ignore
