@@ -1,6 +1,7 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
 /* A raw-monotonic clock with externally scheduled, nominal-time timestamps. */
 #include <linux/etherdevice.h>
+#include <linux/ctype.h>
 #include <linux/ethtool.h>
 #include <linux/hrtimer.h>
 #include <linux/math64.h>
@@ -8,6 +9,7 @@
 #include <linux/net_tstamp.h>
 #include <linux/platform_device.h>
 #include <linux/ptp_clock_kernel.h>
+#include <linux/slab.h>
 #include <linux/timekeeping.h>
 #include <linux/version.h>
 
@@ -21,11 +23,16 @@ module_param(freq_error_ppb, long, 0444);
 MODULE_PARM_DESC(freq_error_ppb, "Intrinsic frequency error, parts per billion");
 static long initial_offset_ns = 10000000000L;
 module_param(initial_offset_ns, long, 0444);
-MODULE_PARM_DESC(initial_offset_ns, "Initial offset from guest realtime, ns");
+MODULE_PARM_DESC(initial_offset_ns, "Initial offset from system realtime, ns");
 static bool no_crosststamp;
 module_param(no_crosststamp, bool, 0444);
 static char *driver_name = "virt_phc_extts";
 module_param(driver_name, charp, 0444);
+
+struct input_edge {
+	u64 raw;
+	unsigned int polarity;
+};
 
 static struct {
 	struct platform_device *pdev;
@@ -38,9 +45,9 @@ static struct {
 	u64 base_raw;
 	u64 base_phc;
 	s64 rate;
-	u64 edges[EDGE_COUNT];
+	struct input_edge edges[EDGE_COUNT];
 	unsigned int count;
-	bool enabled;
+	unsigned int capture_edges;
 	bool assigned;
 } vphc;
 
@@ -63,24 +70,25 @@ static u64 phc_at(u64 raw)
  */
 static void emit_due(u64 now)
 {
-	while (vphc.count && vphc.edges[0] <= now) {
+	while (vphc.count && vphc.edges[0].raw <= now) {
+		unsigned int polarity = vphc.edges[0].polarity;
 		struct ptp_clock_event event = {
 			.type = PTP_CLOCK_EXTTS,
 			.index = 0,
-			.timestamp = phc_at(vphc.edges[0]),
+			.timestamp = phc_at(vphc.edges[0].raw),
 		};
 
 		vphc.count--;
 		memmove(vphc.edges, vphc.edges + 1,
 			vphc.count * sizeof(vphc.edges[0]));
-		if (vphc.enabled && vphc.assigned)
+		if ((vphc.capture_edges & polarity) && vphc.assigned)
 			ptp_clock_event(vphc.clock, &event);
 	}
 }
 
 static ktime_t next_expiry(void)
 {
-	s64 remaining = vphc.edges[0] - ktime_get_raw_ns();
+	s64 remaining = vphc.edges[0].raw - ktime_get_raw_ns();
 
 	/* RAW cannot drive an hrtimer. Recheck RAW on wakeup: system frequency
 	 * steering can make this approximate monotonic deadline slightly early.
@@ -103,46 +111,124 @@ static enum hrtimer_restart edge_timer(struct hrtimer *timer)
 	return ret;
 }
 
-static ssize_t edge_store(struct device *dev, struct device_attribute *attr,
-			  const char *buf, size_t len)
+static int parse_edge(char *text, unsigned int polarity,
+		      struct input_edge *edges, unsigned int *count)
 {
-	unsigned long flags;
-	u64 edge, now;
-	unsigned int i;
-	int ret = kstrtou64(buf, 10, &edge);
+	u64 raw;
+	char *p;
+	int ret;
 
+	if (!*text)
+		return -EINVAL;
+	for (p = text; *p; p++)
+		if (!isdigit(*p))
+			return -EINVAL;
+	ret = kstrtou64(text, 10, &raw);
 	if (ret)
 		return ret;
+	if (*count && raw <= edges[*count - 1].raw)
+		return -EINVAL;
+	edges[*count] = (struct input_edge) { raw, polarity };
+	(*count)++;
+	return 0;
+}
+
+static ssize_t extts_schedule_store(struct device *dev,
+				   struct device_attribute *attr,
+				   const char *buf, size_t len)
+{
+	struct input_edge *edges;
+	char *text, *cursor, *token, *fall;
+	unsigned long flags;
+	unsigned int n = 0, first, i;
+	u64 now;
+	int ret = 0;
+
+	/* At least two characters per edge except the final one. Parse the
+	 * whole write before filtering elapsed edges, so ordering is unambiguous.
+	 */
+	edges = kmalloc_array(len / 2 + 1, sizeof(*edges), GFP_KERNEL);
+	text = kmemdup_nul(buf, len, GFP_KERNEL);
+	if (!edges || !text) {
+		ret = -ENOMEM;
+		goto free;
+	}
+	if (memchr(buf, '\0', len)) {
+		ret = -EINVAL;
+		goto free;
+	}
+	cursor = text;
+	while ((token = strsep(&cursor, " \t\n\r\v\f"))) {
+		if (!*token)
+			continue;
+		fall = strchr(token, ',');
+		if (fall)
+			*fall++ = '\0';
+		if (!*token && (!fall || !*fall)) {
+			ret = -EINVAL;
+			goto free;
+		}
+		if (*token)
+			ret = parse_edge(token, PTP_RISING_EDGE, edges, &n);
+		if (!ret && fall && *fall)
+			ret = parse_edge(fall, PTP_FALLING_EDGE, edges, &n);
+		if (ret)
+			goto free;
+	}
 	spin_lock_irqsave(&vphc.lock, flags);
 	now = ktime_get_raw_ns();
 	emit_due(now);
-	if (edge <= now || edge - now > MAX_AHEAD_NS) {
-		ret = -EINVAL;
-		goto out;
-	}
-	if (vphc.count == EDGE_COUNT) {
+	for (first = 0; first < n && edges[first].raw <= now; first++)
+		;
+	if (n - first > EDGE_COUNT) {
 		ret = -ENOSPC;
-		goto out;
+		goto unlock;
 	}
-	for (i = 0; i < vphc.count; i++) {
-		if (vphc.edges[i] == edge) {
-			ret = -EEXIST;
-			goto out;
+	for (i = first; i < n; i++) {
+		if (edges[i].raw - now > MAX_AHEAD_NS) {
+			ret = -EINVAL;
+			goto unlock;
 		}
-		if (vphc.edges[i] > edge)
-			break;
 	}
-	memmove(vphc.edges + i + 1, vphc.edges + i,
-		(vphc.count - i) * sizeof(edge));
-	vphc.edges[i] = edge;
-	vphc.count++;
-	if (!i)
+	vphc.count = n - first;
+	memcpy(vphc.edges, edges + first, vphc.count * sizeof(*edges));
+	if (vphc.count)
 		hrtimer_start(&vphc.timer, next_expiry(), HRTIMER_MODE_ABS);
-out:
+unlock:
 	spin_unlock_irqrestore(&vphc.lock, flags);
+free:
+	kfree(text);
+	kfree(edges);
 	return ret ? ret : len;
 }
-static DEVICE_ATTR_WO(edge);
+
+static ssize_t extts_schedule_show(struct device *dev,
+				  struct device_attribute *attr, char *buf)
+{
+	unsigned long flags;
+	unsigned int i;
+	int len = 0;
+
+	spin_lock_irqsave(&vphc.lock, flags);
+	emit_due(ktime_get_raw_ns());
+	for (i = 0; i < vphc.count; i++) {
+		struct input_edge *edge = &vphc.edges[i];
+
+		if (i)
+			len += sysfs_emit_at(buf, len, " ");
+		len += sysfs_emit_at(buf, len, "%s%llu",
+				edge->polarity == PTP_FALLING_EDGE ? "," : "",
+				edge->raw);
+		if (edge->polarity == PTP_RISING_EDGE &&
+		    i + 1 < vphc.count &&
+		    vphc.edges[i + 1].polarity == PTP_FALLING_EDGE)
+			len += sysfs_emit_at(buf, len, ",%llu", vphc.edges[++i].raw);
+	}
+	len += sysfs_emit_at(buf, len, "\n");
+	spin_unlock_irqrestore(&vphc.lock, flags);
+	return len;
+}
+static DEVICE_ATTR_RW(extts_schedule);
 
 static int vphc_gettimex(struct ptp_clock_info *info, struct timespec64 *ts,
 			struct ptp_system_timestamp *sts)
@@ -249,11 +335,16 @@ static int vphc_enable(struct ptp_clock_info *info,
 
 	if (req->type != PTP_CLK_REQ_EXTTS || req->extts.index)
 		return -EOPNOTSUPP;
-	if (on && (req->extts.flags & PTP_FALLING_EDGE))
+	if (req->extts.flags & ~(PTP_ENABLE_FEATURE | PTP_RISING_EDGE |
+				 PTP_FALLING_EDGE | PTP_STRICT_FLAGS))
 		return -EOPNOTSUPP;
 	spin_lock_irqsave(&vphc.lock, flags);
 	emit_due(ktime_get_raw_ns());
-	vphc.enabled = on;
+	vphc.capture_edges = on ? req->extts.flags &
+		(PTP_RISING_EDGE | PTP_FALLING_EDGE) : 0;
+	/* Legacy requests without an edge selection use rising edges. */
+	if (on && !vphc.capture_edges)
+		vphc.capture_edges = PTP_RISING_EDGE;
 	spin_unlock_irqrestore(&vphc.lock, flags);
 	return 0;
 }
@@ -344,7 +435,8 @@ static int __init vphc_init(void)
 		.enable = vphc_enable,
 		.verify = vphc_verify,
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
-		.supported_extts_flags = PTP_STRICT_FLAGS | PTP_RISING_EDGE,
+		.supported_extts_flags = PTP_STRICT_FLAGS | PTP_RISING_EDGE |
+					 PTP_FALLING_EDGE,
 #endif
 	};
 	vphc.pdev = platform_device_register_simple("virt-phc-extts", -1, NULL, 0);
@@ -368,7 +460,7 @@ static int __init vphc_init(void)
 	ret = register_netdev(vphc.netdev);
 	if (ret)
 		goto free_netdev;
-	ret = device_create_file(&vphc.pdev->dev, &dev_attr_edge);
+	ret = device_create_file(&vphc.pdev->dev, &dev_attr_extts_schedule);
 	if (ret)
 		goto unregister_netdev;
 	pr_info("virt-phc-extts: %s ptp%d, drift %ld ppb\n",
@@ -388,7 +480,7 @@ unregister_device:
 
 static void __exit vphc_exit(void)
 {
-	device_remove_file(&vphc.pdev->dev, &dev_attr_edge);
+	device_remove_file(&vphc.pdev->dev, &dev_attr_extts_schedule);
 	hrtimer_cancel(&vphc.timer);
 	unregister_netdev(vphc.netdev);
 	free_netdev(vphc.netdev);
@@ -398,5 +490,5 @@ static void __exit vphc_exit(void)
 
 module_init(vphc_init);
 module_exit(vphc_exit);
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("Dual MIT/GPL");
 MODULE_DESCRIPTION("Virtual PHC with nominal-time external timestamps");

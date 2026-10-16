@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 obj-m += virt_phc_extts.o
 KDIR ?= /lib/modules/$(shell uname -r)/build
 

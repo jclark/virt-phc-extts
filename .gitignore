@@ -12,4 +12,5 @@ module/.*.cmd
 module/Module.symvers
 module/modules.order
 tools/test-vphc
+tools/vphc-pulse
 __pycache__/
