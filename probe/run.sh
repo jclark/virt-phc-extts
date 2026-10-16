@@ -10,19 +10,25 @@ cat > user-data <<'YAML'
 #cloud-config
 package_update: true
 packages: [linuxptp]
-runcmd:
-  - [ bash, -c, "exec >/dev/ttyS0 2>&1; set -x
+write_files:
+  - path: /root/probe.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      exec >/dev/ttyS0 2>&1
+      set -x
       uname -r
-      grep -o 'accel[^ ]*' /proc/cmdline || true
-      for p in /sys/class/ptp/ptp*; do echo \"$p: $(cat $p/clock_name)\"; done
+      for p in /sys/class/ptp/ptp*; do echo "$p: $(cat $p/clock_name)"; done
       modprobe ptp_kvm || echo 'modprobe ptp_kvm failed'
-      for p in /sys/class/ptp/ptp*; do echo \"$p: $(cat $p/clock_name)\"; done
+      for p in /sys/class/ptp/ptp*; do echo "$p: $(cat $p/clock_name)"; done
       ls -l /dev/ptp*
       date -u
       date -s '2020-01-01 00:00:00' >/dev/null && echo 'guest clock set wrong'
       date -u
-      for p in /dev/ptp[0-9]*; do echo \"== $p\"; phc_ctl $p get cmp; done
-      echo PROBE-DONE" ]
+      for p in /dev/ptp[0-9]*; do echo "== $p"; phc_ctl $p get cmp; done
+      echo PROBE-DONE
+runcmd:
+  - [ /root/probe.sh ]
   - [ poweroff ]
 YAML
 printf 'instance-id: probe-1\nlocal-hostname: probe\n' > meta-data
@@ -43,5 +49,5 @@ echo "===== console.log (tail) ====="
 tail -n 120 console.log
 echo "===== summary ====="
 grep -E "running 'modules:final'|Up [0-9.]+ seconds" console.log | tail -2 || true
-grep -q PROBE-DONE console.log && echo "RESULT: probe script completed" || { echo "RESULT: probe script did not complete"; exit 1; }
+grep -qx PROBE-DONE console.log && echo "RESULT: probe script completed" || { echo "RESULT: probe script did not complete"; exit 1; }
 grep -q "KVM virtual PTP" console.log && echo "RESULT: ptp_kvm present in guest" || echo "RESULT: no ptp_kvm in guest (TCG or module missing)"
