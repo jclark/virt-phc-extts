@@ -55,7 +55,8 @@ Rules:
 - Ask before anything costly: large downloads, installing packages on lab hosts, long builds.
   Cloud images are a few hundred MB; say the size and the path's speed first.
 - Do not touch lab hosts other than maasdam and edam, and nothing on them beyond what the trial
-  needs. Read `~/src/satpulse-systest/CLAUDE.md` before using them.
+  needs. The lab rules are in satpulse-systest (`https://github.com/jclark/satpulse-systest.git`); clone it into
+  `~/satpulse-systest` (small) and read its `CLAUDE.md` before using them.
 - Never mention AI tools in commits or the repo. Commit messages explain what and why.
 - Keep the module small and plain C in kernel style; no generality beyond the concept.
 - Report deltas and failures plainly; when a step is verified, say how.
