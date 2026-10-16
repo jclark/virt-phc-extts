@@ -1,6 +1,6 @@
 # Implementation prompt for virt-phc-extts
 
-Paste the text below the line into a new session started in `~/src/virt-phc-extts`.
+Paste the text below the line into a new session started in `~/virt-phc-extts`.
 
 ---
 
@@ -12,11 +12,11 @@ in front of the PHC, true time from the host via /dev/ptp_kvm, an x86_64 guest f
 image we control, satpulse unchanged except for the ubxsim timing mode on a branch.
 
 Where things are (this session runs on maasdam, an x86 Fedora 44 host with KVM):
-- This directory, `~/src/virt-phc-extts`, is the public GitHub repo `jclark/virt-phc-extts`
+- This directory, `~/virt-phc-extts`, is the public GitHub repo `jclark/virt-phc-extts`
   (gh is logged in; commits as James Clark). The runner probe has been run; its result is in
   `PROBE.md`.
 - satpulse is not checked out on maasdam. Clone `https://github.com/jclark/satpulse` into
-  `~/src/satpulse` (about 80 MB) and read its `CLAUDE.md`; Go style, `make`, and the smoke
+  `~/satpulse` (about 80 MB; maasdam keeps checkouts directly under the home directory) and read its `CLAUDE.md`; Go style, `make`, and the smoke
   harness rules apply to any satpulse change. The simulator work goes on a branch there, not on
   master. Go 1.26 is installed.
 - The u-blox interface description (needed for the ubxsim timing mode) is not on maasdam and
