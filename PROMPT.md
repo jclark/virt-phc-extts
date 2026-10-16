@@ -11,23 +11,33 @@ space in CLOCK_MONOTONIC_RAW nanoseconds and timestamped at their nominal time, 
 in front of the PHC, true time from the host via /dev/ptp_kvm, an x86_64 guest from a cloud
 image we control, satpulse unchanged except for the ubxsim timing mode on a branch.
 
-Where things are:
-- satpulse: `~/src/satpulse` (read its `CLAUDE.md`; Go style, make, smoke harness rules apply to
-  any satpulse change; the simulator work goes on a branch there, not on master).
-- kernel source for reference: `~/src/linux` (shallow, net-next). Use it to read the ptp core
-  and `drivers/ptp/ptp_mock.c`; the module is built against the guest kernel's headers, not
-  against this tree.
-- QEMU usage reference: `~/src/bcm-phy-ptp-deadlock/tools/qemu/` and the "QEMU test" section
-  of `~/src/bcm-phy-ptp-deadlock/HANDOFF.md`.
-- This directory is the public GitHub repo `virt-phc-extts`; the probe workflow and its result
-  are in `.github/workflows/` and `PROBE.md` if the probe has already been run.
+Where things are (this session runs on maasdam, an x86 Fedora 44 host with KVM):
+- This directory, `~/src/virt-phc-extts`, is the public GitHub repo `jclark/virt-phc-extts`
+  (gh is logged in; commits as James Clark). The runner probe has been run; its result is in
+  `PROBE.md`.
+- satpulse is not checked out on maasdam. Clone `https://github.com/jclark/satpulse` into
+  `~/src/satpulse` (about 80 MB) and read its `CLAUDE.md`; Go style, `make`, and the smoke
+  harness rules apply to any satpulse change. The simulator work goes on a branch there, not on
+  master. Go 1.26 is installed.
+- The u-blox interface description (needed for the ubxsim timing mode) is not on maasdam and
+  satpulse has no `CLAUDE.local.md` here: ask jjc where it is before step 2.
+- There is no kernel tree on maasdam. For the ptp core and `drivers/ptp/ptp_mock.c`, fetch the
+  individual files from https://git.kernel.org (raw, small) or install `kernel-devel` for
+  the headers. The module is built against the guest kernel's headers in the guest.
+- QEMU is not installed on maasdam (`qemu-system-x86-core` and friends, a few tens of MB from
+  Fedora's mirrors); say so and ask before installing. `/dev/kvm` is present and world
+  accessible.
+- QEMU usage reference from the earlier deadlock work lives on cantal in
+  `~/src/bcm-phy-ptp-deadlock/tools/qemu/` and `HANDOFF.md` there; maasdam cannot ssh to cantal
+  until cantal's host key is accepted (all LAN hosts are trusted). The probe workflow in this
+  repo is a working example of booting a cloud image with a cloud-init seed and reading the
+  console.
 
 Order of work, each step checked before the next:
-0. If `PROBE.md` does not exist or says the probe did not run: add the probe workflow described
-   in CONCEPT.md "Order of work" step 0, push, watch the run, and record in `PROBE.md` whether
-   /dev/kvm exists on the runner, whether the guest booted under KVM or TCG, how long the boot
-   took, and whether /dev/ptp_kvm existed in the guest. Stop and report if KVM is not available:
-   the design still works under TCG but the true-time source changes, and jjc decides.
+0. Read `PROBE.md`: the runner has KVM and the guest boots under it. If it says ptp_kvm was
+   missing in the Debian cloud kernel, the image recipe must use a kernel that has it (check
+   Debian's non-cloud kernel or Ubuntu's cloud image) and the probe should be rerun with that
+   image before step 3.
 1. The module (`module/`), with a Makefile for out-of-tree build, plus a small test tool
    (`tools/`) that sets the pin function, enables extts, writes edges and prints events. Verify
    locally in a QEMU guest (KVM on maasdam or edam, TCG on cantal; QEMU is not installed on
