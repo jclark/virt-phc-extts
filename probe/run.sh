@@ -49,5 +49,5 @@ echo "===== console.log (tail) ====="
 tail -n 120 console.log
 echo "===== summary ====="
 grep -E "running 'modules:final'|Up [0-9.]+ seconds" console.log | tail -2 || true
-grep -qx PROBE-DONE console.log && echo "RESULT: probe script completed" || { echo "RESULT: probe script did not complete"; exit 1; }
+tr -d '\r' < console.log | grep -qx PROBE-DONE && echo "RESULT: probe script completed" || { echo "RESULT: probe script did not complete"; exit 1; }
 grep -q "KVM virtual PTP" console.log && echo "RESULT: ptp_kvm present in guest" || echo "RESULT: no ptp_kvm in guest (TCG or module missing)"

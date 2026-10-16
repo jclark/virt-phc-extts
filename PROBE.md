@@ -19,3 +19,6 @@ Second run (38831693128), with the in-guest script fixed:
 
 So the Debian genericcloud image is usable as the guest image as it is, and the true-time source
 for the simulator exists in CI.
+
+The second run was reported as failed only because the completion marker check did not allow
+for the carriage return the serial console adds; fixed in the following commit.
